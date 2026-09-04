@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Taxcalc GitOps project scoped to taxcalc-config and taxcalc-dev
   sourceRepos:
-    - https://github.com/AI-Native-2026-07-29-Intuit/taxcalc-config.git
+    - https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
   destinations:
     - namespace: taxcalc-dev
       server: https://kubernetes.default.svc

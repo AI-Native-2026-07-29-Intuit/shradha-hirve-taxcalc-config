@@ -10,7 +10,7 @@ metadata:
 spec:
   project: taxcalc
   source:
-    repoURL: https://github.com/AI-Native-2026-07-29-Intuit/taxcalc-config.git
+    repoURL: https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
     path: overlays/dev
     targetRevision: w6d2-implementation
   destination:
