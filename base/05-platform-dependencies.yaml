@@ -1,0 +1,432 @@
+# W5D3 supporting backing services for taxcalc-api: Postgres, MongoDB, Redis, Kafka.
+# Images/config mirror W5D2's compose.yaml (Postgres/Redis/Kafka) and
+# .github/workflows/docker.yml (Mongo) as the source of truth. Not part of the
+# 7-manifest W5D3 deliverable; provisioned so taxcalc-api's existing in-cluster
+# DNS expectations (postgres/redis/kafka.taxcalc-dev.svc.cluster.local) resolve.
+# Existing repo SQL assets (db/V1__schema.sql and the src/main/resources/db/migration
+# V3/V4 companion migrations), reused verbatim so a fresh k3d Postgres volume gets the
+# same schema Hibernate's ddl-auto=validate expects (fixes: missing table [taxcalc.bracket]).
+# Postgres's docker-entrypoint-initdb.d convention runs *.sql files alphabetically, once,
+# only when the data directory is empty on first initialization.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-initdb
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: database
+data:
+
+  V1__schema.sql: |
+    CREATE SCHEMA IF NOT EXISTS taxcalc;
+
+    -- taxcalc.taxpayer: one row per taxpayer. Referenced by taxcalc.liability.
+    CREATE TABLE taxcalc.taxpayer (
+        id            TEXT NOT NULL,
+        display_name  TEXT NOT NULL,
+        filing_status TEXT NOT NULL,
+        created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+        CONSTRAINT taxpayer_pk PRIMARY KEY (id),
+
+        -- display_name must carry an actual name, not just whitespace
+        CONSTRAINT taxpayer_display_name_not_blank CHECK (btrim(display_name) <> ''),
+
+        -- filing_status is enum-like; TEXT + CHECK is used instead of a PostgreSQL ENUM
+        -- so new statuses can be added with a constraint migration, not a type migration
+        CONSTRAINT taxpayer_filing_status_valid CHECK (
+            filing_status IN ('SINGLE', 'MARRIED_JOINT', 'MARRIED_SEPARATE', 'HEAD_OF_HOUSEHOLD')
+        )
+    );
+
+    -- taxcalc.bracket: reference/lookup data for progressive and flat tax brackets,
+    -- scoped by jurisdiction and tax_year. Mirrors the Week 1 TaxBracket record.
+    CREATE TABLE taxcalc.bracket (
+        id           TEXT NOT NULL,
+        jurisdiction TEXT NOT NULL,
+        tax_year     INTEGER NOT NULL,
+        code         TEXT NOT NULL,
+        rate         NUMERIC(6,4) NOT NULL,
+        floor        NUMERIC(12,2) NOT NULL,
+        ceiling      NUMERIC(12,2) NOT NULL,
+
+        CONSTRAINT bracket_pk PRIMARY KEY (id),
+
+        -- a jurisdiction cannot define the same bracket code twice in the same tax year
+        CONSTRAINT bracket_natural_key UNIQUE (jurisdiction, tax_year, code),
+
+        -- rate is a proportion of taxable income, so it must fall within [0, 1]
+        CONSTRAINT bracket_rate_range CHECK (rate >= 0 AND rate <= 1),
+
+        -- floor is a monetary threshold and cannot be negative
+        CONSTRAINT bracket_floor_non_negative CHECK (floor >= 0),
+
+        -- a bracket's ceiling must be at or above its own floor to describe a valid range
+        CONSTRAINT bracket_ceiling_at_least_floor CHECK (ceiling >= floor),
+
+        -- guards against nonsensical or accidental tax_year values (e.g. typos)
+        CONSTRAINT bracket_tax_year_reasonable CHECK (tax_year BETWEEN 2000 AND 2100)
+    );
+
+    -- taxcalc.liability: one row per computed tax liability for a taxpayer in a tax year,
+    -- optionally referencing the bracket that was applied. Mirrors TaxLiabilityService.computeLiability.
+    CREATE TABLE taxcalc.liability (
+        id                  TEXT NOT NULL,
+        taxpayer_id         TEXT NOT NULL,
+        bracket_id          TEXT,
+        tax_year            INTEGER NOT NULL,
+        taxable_amount      NUMERIC(12,2) NOT NULL,
+        computed_liability  NUMERIC(12,2) NOT NULL,
+        computed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+        CONSTRAINT liability_pk PRIMARY KEY (id),
+
+        -- deleting a taxpayer removes their liability history with them
+        CONSTRAINT liability_taxpayer_fk FOREIGN KEY (taxpayer_id)
+            REFERENCES taxcalc.taxpayer (id) ON DELETE CASCADE,
+
+        -- deleting a bracket definition detaches historical liability rows from it,
+        -- since TaxLiabilityService.computeLiability already treats "no bracket" as valid
+        CONSTRAINT liability_bracket_fk FOREIGN KEY (bracket_id)
+            REFERENCES taxcalc.bracket (id) ON DELETE SET NULL,
+
+        -- taxable_amount is the input to TaxLiabilityService.computeLiability and cannot be negative
+        CONSTRAINT liability_taxable_amount_non_negative CHECK (taxable_amount >= 0),
+
+        -- computed_liability is the output of TaxLiabilityService.computeLiability and cannot be negative
+        CONSTRAINT liability_computed_liability_non_negative CHECK (computed_liability >= 0),
+
+        -- guards against nonsensical or accidental tax_year values (e.g. typos)
+        CONSTRAINT liability_tax_year_reasonable CHECK (tax_year BETWEEN 2000 AND 2100)
+    );
+
+  V3__event_outbox.sql: |
+    CREATE TABLE IF NOT EXISTS taxcalc.event_outbox (
+        id            UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+        aggregate_id  TEXT         NOT NULL,
+        topic         TEXT         NOT NULL,
+        payload       JSONB        NOT NULL,
+        occurred_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        published_at  TIMESTAMPTZ  NULL
+    );
+
+
+    CREATE INDEX IF NOT EXISTS idx_event_outbox_unpublished
+        ON taxcalc.event_outbox (occurred_at)
+        WHERE published_at IS NULL;
+
+  V4__event_outbox_trace_context.sql: |
+    -- Persists the W3C trace context of the originating write alongside each outbox row so the
+    -- scheduled publisher can continue that trace when it later publishes to Kafka.
+    --
+    -- Both columns are nullable: rows written before this migration (or written outside any active
+    -- span) carry no context, and OutboxPublisher falls back to starting a fresh trace for them.
+    --
+    -- tracestate is stored as well as traceparent because the configured propagator
+    -- (otel.propagators defaults to "tracecontext,baggage") may emit both fields; persisting only
+    -- traceparent would silently drop vendor state on round-trip.
+    ALTER TABLE taxcalc.event_outbox
+        ADD COLUMN IF NOT EXISTS traceparent TEXT NULL,
+        ADD COLUMN IF NOT EXISTS tracestate  TEXT NULL;
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/part-of: taxcalc
+        app.kubernetes.io/managed-by: kubectl
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "taxcalc_dev"
+            - name: POSTGRES_USER
+              value: "taxcalc_dev"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: taxcalc-api-secrets
+                  key: SPRING_DATASOURCE_PASSWORD
+          volumeMounts:
+            - name: postgres-initdb
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "taxcalc_dev", "-d", "taxcalc_dev"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "taxcalc_dev", "-d", "taxcalc_dev"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+      volumes:
+        - name: postgres-initdb
+          configMap:
+            name: postgres-initdb
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: mongo
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: database
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mongo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mongo
+        app.kubernetes.io/part-of: taxcalc
+        app.kubernetes.io/managed-by: kubectl
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          ports:
+            - name: mongo
+              containerPort: 27017
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: mongo
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: mongo
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: mongo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: redis
+        app.kubernetes.io/part-of: taxcalc
+        app.kubernetes.io/managed-by: kubectl
+        app.kubernetes.io/component: cache
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: redis
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: cache
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kafka
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: messaging
+spec:
+  serviceName: kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kafka
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kafka
+        app.kubernetes.io/part-of: taxcalc
+        app.kubernetes.io/managed-by: kubectl
+        app.kubernetes.io/component: messaging
+    spec:
+      containers:
+        - name: kafka
+          image: apache/kafka:3.7.2
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: controller
+              containerPort: 9093
+          env:
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@localhost:9093"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka.taxcalc-dev.svc.cluster.local:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_TRANSACTION_STATE_LOG_MIN_ISR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_LOG_DIRS
+              value: "/var/lib/kafka/data"
+          readinessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 10
+            failureThreshold: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: kafka
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: messaging
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kafka
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+    - name: controller
+      port: 9093
+      targetPort: controller

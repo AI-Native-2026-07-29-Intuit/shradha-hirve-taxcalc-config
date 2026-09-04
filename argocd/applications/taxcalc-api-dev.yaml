@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: taxcalc-api-dev
+  namespace: argocd
+  labels:
+    team: taxcalc
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: taxcalc
+  source:
+    repoURL: https://github.com/AI-Native-2026-07-29-Intuit/taxcalc-config.git
+    path: overlays/dev
+    targetRevision: w6d2-implementation
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: taxcalc-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
