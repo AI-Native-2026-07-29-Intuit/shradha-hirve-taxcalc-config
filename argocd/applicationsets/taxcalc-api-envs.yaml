@@ -1,0 +1,54 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: taxcalc-api-envs
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - list:
+              elements:
+                - env: dev
+                  overlay: dev
+                  namespace: taxcalc-dev
+                  wave: "0"
+                - env: staging
+                  overlay: staging
+                  namespace: taxcalc-staging
+                  wave: "1"
+                - env: prod
+                  overlay: prod
+                  namespace: taxcalc-prod
+                  wave: "2"
+          - clusters:
+              selector:
+                matchLabels:
+                  uptimecrew.example.internal/tier: workload
+  template:
+    metadata:
+      name: taxcalc-api-{{env}}
+      namespace: argocd
+      labels:
+        team: taxcalc
+      annotations:
+        argocd.argoproj.io/sync-wave: "{{wave}}"
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: taxcalc
+      source:
+        repoURL: https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
+        targetRevision: w6d2-implementation
+        path: overlays/{{overlay}}
+      destination:
+        server: "{{server}}"
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
