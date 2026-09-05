@@ -4,6 +4,8 @@ metadata:
   name: taxcalc-api-envs
   namespace: argocd
 spec:
+  syncPolicy:
+    preserveResourcesOnDeletion: true
   generators:
     - matrix:
         generators:
