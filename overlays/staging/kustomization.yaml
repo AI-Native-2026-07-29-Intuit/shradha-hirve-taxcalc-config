@@ -50,3 +50,10 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  - target:
+      kind: Ingress
+      name: taxcalc-api
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: taxcalc.staging.uptimecrew.internal
