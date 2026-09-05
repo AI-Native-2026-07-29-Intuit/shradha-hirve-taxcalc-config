@@ -60,3 +60,14 @@ spec:
         - p, proj:taxcalc:releaser, applications, delete, taxcalc/*, deny
       groups:
         - taxcalc-releasers
+  # Weekend prod freeze: Friday 17:00 for 60h (through Monday 05:00).
+  # manualSync: true lets a releaser still sync from the UI if needed.
+  syncWindows:
+    - kind: deny
+      schedule: "0 17 * * 5"
+      duration: 60h
+      manualSync: true
+      applications:
+        - taxcalc-api-prod
+      namespaces:
+        - taxcalc-prod
