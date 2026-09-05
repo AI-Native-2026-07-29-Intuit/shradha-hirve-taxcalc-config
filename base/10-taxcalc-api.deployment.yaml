@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: taxcalc-api
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taxcalc-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taxcalc-api
+        app.kubernetes.io/part-of: taxcalc
+        app.kubernetes.io/managed-by: kubectl
+        app.kubernetes.io/component: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+      containers:
+        - name: taxcalc-api
+          image: uptimecrew/taxcalc-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: taxcalc-api-config
+            - secretRef:
+                name: taxcalc-api-secrets
+          env:
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+            initialDelaySeconds: 0
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            periodSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+            initialDelaySeconds: 0
+            timeoutSeconds: 3

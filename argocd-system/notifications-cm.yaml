@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-notifications-controller
+    app.kubernetes.io/part-of: argocd
+data:
+  service.slack: |
+    token: $slack-token
+  subscriptions: |
+    - recipients:
+        - slack:taxcalc-deploys
+      triggers:
+        - on-sync-failed
+        - on-health-degraded
+      selector: team=taxcalc
+  trigger.on-sync-failed: |
+    - description: Application syncing has failed
+      send:
+        - app-sync-failed
+      when: app.status.operationState != nil and app.status.operationState.phase in ['Error', 'Failed']
+  trigger.on-health-degraded: |
+    - description: Application has degraded
+      send:
+        - app-health-degraded
+      when: app.status.health.status == 'Degraded'
+  template.app-sync-failed: |
+    message: |
+      Application {{.app.metadata.name}} sync failed.
+      project={{.app.spec.project}} revision={{.app.status.sync.revision}} phase={{.app.status.operationState.phase}}
+      {{.app.status.operationState.message}}
+    slack:
+      attachments: |
+        [{
+          "title": "{{.app.metadata.name}} sync failed",
+          "color": "#E96D76",
+          "fields": [
+            {"title": "Application", "value": "{{.app.metadata.name}}", "short": true},
+            {"title": "Project", "value": "{{.app.spec.project}}", "short": true},
+            {"title": "Revision", "value": "{{.app.status.sync.revision}}", "short": true},
+            {"title": "Phase", "value": "{{.app.status.operationState.phase}}", "short": true},
+            {"title": "Message", "value": "{{.app.status.operationState.message}}", "short": false}
+          ]
+        }]
+  template.app-health-degraded: |
+    message: |
+      Application {{.app.metadata.name}} health is {{.app.status.health.status}}.
+      project={{.app.spec.project}} revision={{.app.status.sync.revision}}
+      {{.app.status.health.message}}
+    slack:
+      attachments: |
+        [{
+          "title": "{{.app.metadata.name}} health degraded",
+          "color": "#f4c030",
+          "fields": [
+            {"title": "Application", "value": "{{.app.metadata.name}}", "short": true},
+            {"title": "Project", "value": "{{.app.spec.project}}", "short": true},
+            {"title": "Revision", "value": "{{.app.status.sync.revision}}", "short": true},
+            {"title": "Health", "value": "{{.app.status.health.status}}", "short": true},
+            {"title": "Message", "value": "{{.app.status.health.message}}", "short": false}
+          ]
+        }]

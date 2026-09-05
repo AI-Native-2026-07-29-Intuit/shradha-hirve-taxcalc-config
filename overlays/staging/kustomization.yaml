@@ -1,0 +1,59 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: taxcalc-staging
+resources:
+  - ../../base
+replicas:
+  - name: taxcalc-api
+    count: 2
+images:
+  - name: uptimecrew/taxcalc-api
+    newName: uptimecrew/taxcalc-api
+    newTag: "0.1.0"
+patches:
+  - target:
+      kind: ConfigMap
+      name: taxcalc-api-config
+    patch: |-
+      - op: replace
+        path: /data/SPRING_PROFILES_ACTIVE
+        value: "staging"
+      - op: add
+        path: /data/LOG_LEVEL
+        value: "INFO"
+      - op: replace
+        path: /data/SPRING_DATASOURCE_URL
+        value: "jdbc:postgresql://postgres.taxcalc-staging.svc.cluster.local:5432/taxcalc_dev"
+      - op: replace
+        path: /data/SPRING_DATA_REDIS_HOST
+        value: "redis.taxcalc-staging.svc.cluster.local"
+      - op: replace
+        path: /data/SPRING_KAFKA_BOOTSTRAP_SERVERS
+        value: "kafka.taxcalc-staging.svc.cluster.local:9092"
+      - op: replace
+        path: /data/SPRING_DATA_MONGODB_URI
+        value: "mongodb://mongo.taxcalc-staging.svc.cluster.local:27017/taxcalc"
+      - op: replace
+        path: /data/OTEL_EXPORTER_OTLP_ENDPOINT
+        value: "http://otel-collector.taxcalc-staging.svc.cluster.local:4318"
+  - target:
+      kind: StatefulSet
+      name: kafka
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/env/4/value
+        value: "PLAINTEXT://kafka.taxcalc-staging.svc.cluster.local:9092"
+  - target:
+      kind: Deployment
+      name: taxcalc-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  - target:
+      kind: Ingress
+      name: taxcalc-api
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: taxcalc.staging.uptimecrew.internal
