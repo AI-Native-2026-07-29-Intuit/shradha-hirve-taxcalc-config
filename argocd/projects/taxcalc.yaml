@@ -4,11 +4,15 @@ metadata:
   name: taxcalc
   namespace: argocd
 spec:
-  description: Taxcalc GitOps project scoped to taxcalc-config and taxcalc-dev
+  description: Taxcalc GitOps project scoped to shradha-hirve-taxcalc-config and taxcalc-{dev,staging,prod}
   sourceRepos:
     - https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
   destinations:
     - namespace: taxcalc-dev
+      server: https://kubernetes.default.svc
+    - namespace: taxcalc-staging
+      server: https://kubernetes.default.svc
+    - namespace: taxcalc-prod
       server: https://kubernetes.default.svc
   clusterResourceWhitelist: []
   namespaceResourceWhitelist:
@@ -30,3 +34,29 @@ spec:
       kind: HorizontalPodAutoscaler
     - group: networking.k8s.io
       kind: Ingress
+  roles:
+    - name: developer
+      description: Sync and update taxcalc apps in taxcalc-dev and taxcalc-staging only. No delete, no prod promotion.
+      policies:
+        - p, proj:taxcalc:developer, applications, get, taxcalc/*, allow
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, action/*, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, action/*, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, delete, taxcalc/*, deny
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-prod, deny
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-prod, deny
+      groups:
+        - taxcalc-developers
+    - name: releaser
+      description: Promote and sync taxcalc-api-prod. No delete, no admin over the whole project.
+      policies:
+        - p, proj:taxcalc:releaser, applications, get, taxcalc/*, allow
+        - p, proj:taxcalc:releaser, applications, sync, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, update, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, action/*, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, delete, taxcalc/*, deny
+      groups:
+        - taxcalc-releasers
