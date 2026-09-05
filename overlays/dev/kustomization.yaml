@@ -3,6 +3,7 @@ kind: Kustomization
 namespace: taxcalc-dev
 resources:
   - ../../base
+  - notify-test-forbidden-clusterrole.yaml
 replicas:
   - name: taxcalc-api
     count: 1

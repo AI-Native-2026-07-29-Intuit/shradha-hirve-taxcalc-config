@@ -1,0 +1,7 @@
+# TEMPORARY: W6D2 on-sync-failed test. Revert immediately after Slack screenshot.
+# Cluster-scoped so AppProject clusterResourceWhitelist: [] rejects it at sync.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: taxcalc-w6d2-notify-test
+rules: []
