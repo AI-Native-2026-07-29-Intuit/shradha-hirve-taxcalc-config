@@ -52,3 +52,6 @@ spec:
         syncOptions:
           - CreateNamespace=true
           - ServerSideApply=true
+          # k8s 1.35 + SSA: kubectl-scale/HPA own spec.replicas. Without Force,
+          # selfHeal cannot overwrite that field manager and replica drift sticks.
+          - Force=true
