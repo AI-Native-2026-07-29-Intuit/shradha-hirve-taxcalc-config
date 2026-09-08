@@ -41,6 +41,8 @@ Resources:
           Value: taxcalc
         - Key: Environment
           Value: !Ref EnvName
+        - Key: ManagedBy
+          Value: cloudformation
 
   PublicSubnetA:
     Type: AWS::EC2::Subnet
