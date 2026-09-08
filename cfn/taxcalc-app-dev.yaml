@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: taxcalc application data plane (RDS PostgreSQL + DB security group). Artifact bucket is Task 3B.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name used for tags and resource names.
+
+  NetworkStackName:
+    Type: String
+    Default: taxcalc-network-dev
+    Description: Network stack whose exports provide VpcId, PrivateSubnets, and AppSgId.
+
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedPattern: ^db\.[a-z0-9]+\.[a-z0-9]+$
+    Description: RDS instance class for the taxcalc PostgreSQL database.
+
+Resources:
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: taxcalc PostgreSQL access from application security group only
+      VpcId:
+        Fn::ImportValue: !Sub "${NetworkStackName}-VpcId"
+      SecurityGroupIngress:
+        - Description: PostgreSQL from taxcalc application SG only
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub "${NetworkStackName}-AppSgId"
+      SecurityGroupEgress:
+        - Description: HTTPS for RDS engine/service endpoints
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-db-sg
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub taxcalc ${EnvName} private subnets for RDS
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
+      Tags:
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBInstanceIdentifier: !Sub taxcalc-${EnvName}-postgres
+      DBName: taxcalc
+      Engine: postgres
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: 20
+      StorageType: gp3
+      StorageEncrypted: true
+      PubliclyAccessible: false
+      DeletionProtection: true
+      MultiAZ: false
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      MasterUsername: "{{resolve:secretsmanager:taxcalc/dev/db-master:SecretString:username}}"
+      MasterUserPassword: "{{resolve:secretsmanager:taxcalc/dev/db-master:SecretString:password}}"
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-postgres
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+Outputs:
+  DbInstanceId:
+    Description: RDS instance identifier
+    Value: !Ref DbInstance
+    Export:
+      Name: !Sub ${AWS::StackName}-DbInstanceId
+
+  DbSecurityGroupId:
+    Description: Database security group ID
+    Value: !Ref DbSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-DbSecurityGroupId
+
+  DbEndpointAddress:
+    Description: RDS endpoint hostname
+    Value: !GetAtt DbInstance.Endpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-DbEndpointAddress
