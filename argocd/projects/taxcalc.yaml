@@ -1,0 +1,73 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: taxcalc
+  namespace: argocd
+spec:
+  description: Taxcalc GitOps project scoped to shradha-hirve-taxcalc-config and taxcalc-{dev,staging,prod}
+  sourceRepos:
+    - https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
+  destinations:
+    - namespace: taxcalc-dev
+      server: https://kubernetes.default.svc
+    - namespace: taxcalc-staging
+      server: https://kubernetes.default.svc
+    - namespace: taxcalc-prod
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ResourceQuota
+    - group: ""
+      kind: LimitRange
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: StatefulSet
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: networking.k8s.io
+      kind: Ingress
+  roles:
+    - name: developer
+      description: Sync and update taxcalc apps in taxcalc-dev and taxcalc-staging only. No delete, no prod promotion.
+      policies:
+        - p, proj:taxcalc:developer, applications, get, taxcalc/*, allow
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, action/*, taxcalc/taxcalc-api-dev, allow
+        - p, proj:taxcalc:developer, applications, action/*, taxcalc/taxcalc-api-staging, allow
+        - p, proj:taxcalc:developer, applications, delete, taxcalc/*, deny
+        - p, proj:taxcalc:developer, applications, sync, taxcalc/taxcalc-api-prod, deny
+        - p, proj:taxcalc:developer, applications, update, taxcalc/taxcalc-api-prod, deny
+      groups:
+        - taxcalc-developers
+    - name: releaser
+      description: Promote and sync taxcalc-api-prod. No delete, no admin over the whole project.
+      policies:
+        - p, proj:taxcalc:releaser, applications, get, taxcalc/*, allow
+        - p, proj:taxcalc:releaser, applications, sync, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, update, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, action/*, taxcalc/taxcalc-api-prod, allow
+        - p, proj:taxcalc:releaser, applications, delete, taxcalc/*, deny
+      groups:
+        - taxcalc-releasers
+  # Weekend prod freeze: Friday 17:00 for 60h (through Monday 05:00).
+  # manualSync: true lets a releaser still sync from the UI if needed.
+  syncWindows:
+    - kind: deny
+      schedule: "0 17 * * 5"
+      duration: 60h
+      manualSync: true
+      applications:
+        - taxcalc-api-prod
+      namespaces:
+        - taxcalc-prod

@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: taxcalc-dev
+resources:
+  - ../../base
+replicas:
+  - name: taxcalc-api
+    count: 1
+images:
+  - name: uptimecrew/taxcalc-api
+    newName: uptimecrew/taxcalc-api
+    newTag: "0.1.0"
+patches:
+  - target:
+      kind: ConfigMap
+      name: taxcalc-api-config
+    patch: |-
+      - op: replace
+        path: /data/SPRING_PROFILES_ACTIVE
+        value: "dev"
+      - op: add
+        path: /data/LOG_LEVEL
+        value: "DEBUG"
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: taxcalc-api
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
+  - target:
+      kind: Deployment
+      name: taxcalc-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
