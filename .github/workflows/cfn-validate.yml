@@ -1,0 +1,87 @@
+# CloudFormation PR validation.
+#
+# GitHub-hosted runners cannot reach cohort Floci (http://localhost:4566).
+# This workflow therefore runs static checks only (cfn-lint + cfn-nag).
+# Do not add a fake real-AWS role ARN or pretend CI can call localhost.
+#
+# aws cloudformation validate-template is required locally against Floci:
+#   aws --profile floci --endpoint-url http://localhost:4566 --region us-east-1 \
+#     cloudformation validate-template --template-body file://cfn/<template>.yaml
+#
+# A future real-AWS environment would add SHA-pinned
+# aws-actions/configure-aws-credentials using a real OIDC role from secrets,
+# then the same validate-template calls against AWS — not invented account IDs.
+
+name: Validate CloudFormation
+
+on:
+  pull_request:
+    paths:
+      - "cfn/**"
+      - ".github/workflows/cfn-validate.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cfn-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: cfn-lint and cfn-nag
+    # Cohort-standard runner (same as taxcalc-api GitOps bump / app CI).
+    runs-on: blacksmith-2vcpu-ubuntu-2204
+    timeout-minutes: 10
+
+    env:
+      CFN_LINT_VERSION: "1.56.0"
+      CFN_NAG_VERSION: "0.8.10"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install cfn-lint
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user "cfn-lint==${CFN_LINT_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: cfn-lint all templates
+        run: |
+          set -euo pipefail
+          cfn-lint --version
+          cfn-lint \
+            cfn/taxcalc-bootstrap-dev.yaml \
+            cfn/taxcalc-network-dev.yaml \
+            cfn/taxcalc-app-dev.yaml \
+            cfn/taxcalc-artifacts-dev.yaml
+          cfn-lint cfn/*.yaml
+
+      - name: Install cfn-nag 0.8.10
+        run: |
+          set -euo pipefail
+          sudo gem install cfn-nag -v "${CFN_NAG_VERSION}" --no-document
+          cfn_nag_scan --version
+
+      - name: cfn-nag all templates
+        run: |
+          set -euo pipefail
+          # FAIL findings fail this job. Warnings are printed and not suppressed
+          # (no Metadata cfn_nag rules). --fail-on-warnings is not used: accepted
+          # W* findings are not template defects and must stay visible.
+          cfn_nag_scan --input-path cfn/
+
+      - name: Floci validate-template is local-only
+        run: |
+          set -euo pipefail
+          echo "Skipping aws cloudformation validate-template on GitHub Actions."
+          echo "Floci is only reachable at http://localhost:4566 from the workstation."
+          echo "No real AWS OIDC role is configured in this repository; a placeholder ARN would be dishonest."
+          echo "Covered templates:"
+          printf '%s\n' \
+            cfn/taxcalc-bootstrap-dev.yaml \
+            cfn/taxcalc-network-dev.yaml \
+            cfn/taxcalc-app-dev.yaml \
+            cfn/taxcalc-artifacts-dev.yaml
