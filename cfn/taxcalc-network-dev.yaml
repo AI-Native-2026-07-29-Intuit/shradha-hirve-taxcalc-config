@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: taxcalc three-AZ VPC, public/private subnets, NAT, and application security group
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name used for tags and NAT density (dev vs staging/prod).
+
+  VpcCidr:
+    Type: String
+    Default: 10.41.0.0/16
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(1[6-9]|2[0-8]))$
+    Description: IPv4 CIDR for the VPC. Subnet CIDRs are carved from this block with Fn::Cidr.
+
+Conditions:
+  # IsDev: cheaper single-NAT path. All private AZs share NAT A so local Floci/dev
+  # does not pay for three NAT Gateways.
+  IsDev: !Equals [!Ref EnvName, dev]
+  # IsProdLike: staging and prod need per-AZ NAT so a single AZ outage does not
+  # take down all private-subnet egress (curriculum environment gating).
+  IsProdLike: !Or
+    - !Equals [!Ref EnvName, staging]
+    - !Equals [!Ref EnvName, prod]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-vpc
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-public-a
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: public
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-public-b
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: public
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-public-c
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: public
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-a
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: private
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Select [4, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-b
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: private
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      CidrBlock: !Select [5, !Cidr [!Ref VpcCidr, 6, 8]]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-c
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Tier
+          Value: private
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-igw
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-public-rt
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetAAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetBAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetCAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetC
+      RouteTableId: !Ref PublicRouteTable
+
+  NatEipA:
+    Type: AWS::EC2::EIP
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-eip-a
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEipA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-a
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  # IsProdLike: NAT B/C exist only for staging/prod so each AZ has independent egress.
+  NatEipB:
+    Type: AWS::EC2::EIP
+    Condition: IsProdLike
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-eip-b
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  NatGatewayB:
+    Type: AWS::EC2::NatGateway
+    Condition: IsProdLike
+    Properties:
+      AllocationId: !GetAtt NatEipB.AllocationId
+      SubnetId: !Ref PublicSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-b
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  NatEipC:
+    Type: AWS::EC2::EIP
+    Condition: IsProdLike
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-eip-c
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  NatGatewayC:
+    Type: AWS::EC2::NatGateway
+    Condition: IsProdLike
+    Properties:
+      AllocationId: !GetAtt NatEipC.AllocationId
+      SubnetId: !Ref PublicSubnetC
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-nat-c
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PrivateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-rt-a
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PrivateDefaultRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayA
+
+  PrivateSubnetAAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTableA
+
+  # IsDev: private B/C share NAT A (single NAT total).
+  PrivateSubnetBAssocDev:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: IsDev
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableA
+
+  PrivateSubnetCAssocDev:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: IsDev
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTableA
+
+  # IsProdLike: private B uses NAT B in AZ B.
+  PrivateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Condition: IsProdLike
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-rt-b
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PrivateDefaultRouteB:
+    Type: AWS::EC2::Route
+    Condition: IsProdLike
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayB
+
+  PrivateSubnetBAssocProd:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: IsProdLike
+    Properties:
+      SubnetId: !Ref PrivateSubnetB
+      RouteTableId: !Ref PrivateRouteTableB
+
+  # IsProdLike: private C uses NAT C in AZ C.
+  PrivateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Condition: IsProdLike
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-private-rt-c
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+  PrivateDefaultRouteC:
+    Type: AWS::EC2::Route
+    Condition: IsProdLike
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayC
+
+  PrivateSubnetCAssocProd:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Condition: IsProdLike
+    Properties:
+      SubnetId: !Ref PrivateSubnetC
+      RouteTableId: !Ref PrivateRouteTableC
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: taxcalc-api application traffic (HTTP from VPC only; HTTPS egress)
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref VpcCidr
+          Description: taxcalc-api from VPC CIDR only
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS egress for dependencies
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-${EnvName}-app-sg
+        - Key: Application
+          Value: taxcalc
+        - Key: Environment
+          Value: !Ref EnvName
+
+Outputs:
+  VpcId:
+    Description: VPC ID
+    Value: !Ref Vpc
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcId
+
+  PublicSubnets:
+    Description: Comma-joined public subnet IDs (A,B,C)
+    Value: !Join
+      - ","
+      - - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+        - !Ref PublicSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-PublicSubnets
+
+  PrivateSubnets:
+    Description: Comma-joined private subnet IDs (A,B,C)
+    Value: !Join
+      - ","
+      - - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+        - !Ref PrivateSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-PrivateSubnets
+
+  AppSgId:
+    Description: Application security group ID (Task 3 consumes this; DB SG is Task 3)
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-AppSgId
+
+  VpcCidr:
+    Description: VPC CIDR (optional helper for later stacks)
+    Value: !Ref VpcCidr
+    Export:
+      Name: !Sub ${AWS::StackName}-VpcCidr
