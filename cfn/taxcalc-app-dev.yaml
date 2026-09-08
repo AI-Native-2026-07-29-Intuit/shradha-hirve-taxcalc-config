@@ -54,9 +54,22 @@ Resources:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
       DBSubnetGroupDescription: !Sub taxcalc ${EnvName} private subnets for RDS
-      SubnetIds: !Split
-        - ","
-        - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
+      SubnetIds:
+        - !Select
+          - 0
+          - !Split
+            - ","
+            - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
+        - !Select
+          - 1
+          - !Split
+            - ","
+            - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
+        - !Select
+          - 2
+          - !Split
+            - ","
+            - Fn::ImportValue: !Sub "${NetworkStackName}-PrivateSubnets"
       Tags:
         - Key: Application
           Value: taxcalc
