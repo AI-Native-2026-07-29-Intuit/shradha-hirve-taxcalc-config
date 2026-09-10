@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: taxcalc CloudFormation bootstrap (S3 artifacts + GitHub OIDC deploy role)
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name used in resource names and tags.
+
+  RetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 7
+    MaxValue: 3650
+    Description: Days to retain noncurrent S3 object versions in the bootstrap bucket.
+
+  GitHubOrg:
+    Type: String
+    Default: AI-Native-2026-07-29-Intuit
+    Description: GitHub organization that may assume the CloudFormation deploy role via OIDC.
+
+  GitHubRepo:
+    Type: String
+    Default: shradha-hirve-taxcalc-config
+    Description: GitOps repository (renamed) whose GitHub Actions jobs may assume the deploy role.
+
+Resources:
+  BootstrapBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub taxcalc-cfn-bootstrap-${EnvName}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID: alias/aws/s3
+            BucketKeyEnabled: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: !Ref RetentionDays
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Application
+          Value: taxcalc
+
+  BootstrapBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BootstrapBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt BootstrapBucket.Arn
+              - !Sub "${BootstrapBucket.Arn}/*"
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
+  CfnDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: taxcalc-api-cfn-deploy
+      Description: GitHub OIDC role that deploys taxcalc-* CloudFormation stacks
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: GitHubOidcMainAndPullRequest
+            Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/main
+                  - !Sub repo:${GitHubOrg}/${GitHubRepo}:pull_request
+      Policies:
+        - PolicyName: taxcalc-cfn-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudFormationTaxcalcStacks
+                Effect: Allow
+                Action:
+                  - cloudformation:CancelUpdateStack
+                  - cloudformation:ContinueUpdateRollback
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResource
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeStacks
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:ListChangeSets
+                  - cloudformation:ListStackResources
+                  - cloudformation:UpdateStack
+                  - cloudformation:ValidateTemplate
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/taxcalc-*/*
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/taxcalc-*/*
+              - Sid: BootstrapBucketObjects
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub "${BootstrapBucket.Arn}/*"
+              - Sid: BootstrapBucketList
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetEncryptionConfiguration
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !GetAtt BootstrapBucket.Arn
+              - Sid: PassTaxcalcRolesToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/taxcalc-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: cloudformation.amazonaws.com
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvName
+        - Key: Application
+          Value: taxcalc
+
+Outputs:
+  BootstrapBucketName:
+    Description: Name of the CloudFormation artifact bucket
+    Value: !Ref BootstrapBucket
+    Export:
+      Name: !Sub ${AWS::StackName}-BootstrapBucketName
+
+  BootstrapBucketArn:
+    Description: ARN of the CloudFormation artifact bucket
+    Value: !GetAtt BootstrapBucket.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-BootstrapBucketArn
+
+  CfnDeployRoleArn:
+    Description: ARN of the GitHub OIDC CloudFormation deploy role
+    Value: !GetAtt CfnDeployRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-CfnDeployRoleArn
