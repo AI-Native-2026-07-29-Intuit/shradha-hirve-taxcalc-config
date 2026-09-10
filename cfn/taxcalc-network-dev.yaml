@@ -226,6 +226,15 @@ Resources:
           Value: taxcalc
         - Key: Environment
           Value: !Ref EnvName
+        # Cost-allocation tags: must match taxcalc-cost-dev.yaml budget CostFilters.
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
 
   # IsProdLike: NAT B/C exist only for staging/prod so each AZ has independent egress.
   NatEipB:
@@ -255,6 +264,14 @@ Resources:
           Value: taxcalc
         - Key: Environment
           Value: !Ref EnvName
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
 
   NatEipC:
     Type: AWS::EC2::EIP
@@ -283,6 +300,14 @@ Resources:
           Value: taxcalc
         - Key: Environment
           Value: !Ref EnvName
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
 
   PrivateRouteTableA:
     Type: AWS::EC2::RouteTable

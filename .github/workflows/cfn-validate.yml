@@ -56,7 +56,8 @@ jobs:
             cfn/taxcalc-bootstrap-dev.yaml \
             cfn/taxcalc-network-dev.yaml \
             cfn/taxcalc-app-dev.yaml \
-            cfn/taxcalc-artifacts-dev.yaml
+            cfn/taxcalc-artifacts-dev.yaml \
+            cfn/taxcalc-cost-dev.yaml
           cfn-lint cfn/*.yaml
 
       - name: Install cfn-nag 0.8.10
@@ -84,4 +85,5 @@ jobs:
             cfn/taxcalc-bootstrap-dev.yaml \
             cfn/taxcalc-network-dev.yaml \
             cfn/taxcalc-app-dev.yaml \
-            cfn/taxcalc-artifacts-dev.yaml
+            cfn/taxcalc-artifacts-dev.yaml \
+            cfn/taxcalc-cost-dev.yaml
