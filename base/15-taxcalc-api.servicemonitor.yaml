@@ -1,0 +1,27 @@
+# Task 2 (W6D5): lets the cluster's kube-prometheus-stack Prometheus (which only discovers
+# ServiceMonitor/PodMonitor resources labeled release: kube-prometheus-stack) scrape
+# /actuator/prometheus, so taxcalc_inflight_requests reaches Prometheus for
+# prometheus-adapter (see prometheus-adapter/values-taxcalc-inflight.yaml) to expose as a
+# custom metric for taxcalc-api-hpa.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: taxcalc-api
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: api
+    release: kube-prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taxcalc-api
+  namespaceSelector:
+    matchNames:
+      - taxcalc-dev
+  endpoints:
+    - port: http
+      path: /actuator/prometheus
+      interval: 15s

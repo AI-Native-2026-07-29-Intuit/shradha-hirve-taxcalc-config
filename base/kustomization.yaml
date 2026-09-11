@@ -9,5 +9,7 @@ resources:
   - 20-taxcalc-api.service.yaml
   - 30-taxcalc-api.configmap.yaml
   - 40-taxcalc-api.secret.yaml
-  - 50-taxcalc-api.hpa.yaml
+  - 13-taxcalc-api.hpa.yaml
+  - 14-taxcalc-api.pdb.yaml
+  - 15-taxcalc-api.servicemonitor.yaml
   - 60-taxcalc-api.ingress.yaml

@@ -34,12 +34,20 @@ spec:
       kind: HorizontalPodAutoscaler
     - group: networking.k8s.io
       kind: Ingress
+    - group: policy
+      kind: PodDisruptionBudget
     # W6D5 Task 1: taxcalc-worker-scaledobject (base/12-taxcalc-worker.scaledobject.yaml)
     # scales taxcalc-api-worker on Kafka consumer-group lag. KEDA's operator is
     # cluster infrastructure (installed once, out-of-band, not GitOps-managed by
     # this project); only the namespaced ScaledObject CR taxcalc-api owns is added here.
     - group: keda.sh
       kind: ScaledObject
+    # W6D5 Task 2: taxcalc-api ServiceMonitor (base/15-taxcalc-api.servicemonitor.yaml) lets
+    # kube-prometheus-stack's Prometheus scrape taxcalc_inflight_requests for
+    # taxcalc-api-hpa. The Prometheus/kube-prometheus-stack operator itself is cluster
+    # infrastructure, installed out-of-band; only the namespaced ServiceMonitor CR is added.
+    - group: monitoring.coreos.com
+      kind: ServiceMonitor
   roles:
     - name: developer
       description: Sync and update taxcalc apps in taxcalc-dev and taxcalc-staging only. No delete, no prod promotion.
