@@ -105,6 +105,15 @@ Resources:
           Value: taxcalc
         - Key: Environment
           Value: !Ref EnvName
+        # Cost-allocation tags: must match taxcalc-cost-dev.yaml budget CostFilters.
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
 
 Outputs:
   DbInstanceId:

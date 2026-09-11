@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: taxcalc cost guardrails (SNS alarm topic, monthly AWS Budget, CloudWatch billing alarm)
+
+# AWS/Billing EstimatedCharges is published only to us-east-1. This stack must be
+# deployed in us-east-1 or the billing alarm will never leave INSUFFICIENT_DATA.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name used for cost-allocation tag values and budget cost filters.
+
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 100
+    MinValue: 20
+    MaxValue: 10000
+    Description: >-
+      Monthly COST budget in USD. The dev default of 100 covers a single NAT Gateway
+      (~32 USD/mo hourly + data processing), one db.t3.micro RDS PostgreSQL instance with
+      20 GiB gp3 and 7-day backups (~15-20 USD/mo), and S3 artifact storage plus request
+      and data-transfer charges, leaving headroom for short-lived test resources.
+
+  BillingAlarmUsd:
+    Type: Number
+    Default: 120
+    MinValue: 20
+    MaxValue: 10000
+    Description: >-
+      Threshold in USD for the CloudWatch AWS/Billing EstimatedCharges alarm. Set above
+      MonthlyBudgetUsd so the Budget FORECASTED/ACTUAL notifications fire first and this
+      alarm is the backstop for actual accrued spend.
+
+Resources:
+  CostAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub taxcalc-cost-alarms-${EnvName}
+      DisplayName: !Sub taxcalc ${EnvName} cost alarms
+      # AWS-managed key: Budgets/CloudWatch can publish without a custom key policy.
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: Name
+          Value: !Sub taxcalc-cost-alarms-${EnvName}
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
+
+  CostAlarmTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref CostAlarmTopic
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowBudgetsPublish
+            Effect: Allow
+            Principal:
+              Service: budgets.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CostAlarmTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+          - Sid: AllowCloudWatchPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CostAlarmTopic
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+
+  MonthlyCostBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: !Sub taxcalc-monthly-cost-${EnvName}
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+        # Cost allocation tag filter syntax: TagKeyValue with "user:<key>$<value>".
+        # Both tags must be activated as cost allocation tags in Billing before
+        # these filters match any spend.
+        CostFilters:
+          TagKeyValue:
+            - user:service$taxcalc
+            - !Sub user:env$${EnvName}
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostAlarmTopic
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: SNS
+              Address: !Ref CostAlarmTopic
+
+  BillingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub taxcalc/estimated-charges-${EnvName}
+      AlarmDescription: !Sub >-
+        taxcalc ${EnvName} estimated AWS charges exceeded ${BillingAlarmUsd} USD.
+        Backstop for the taxcalc-monthly-cost-${EnvName} budget notifications.
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - Name: Currency
+          Value: USD
+      Statistic: Maximum
+      # EstimatedCharges updates roughly every 6 hours; 21600s matches that cadence.
+      Period: 21600
+      EvaluationPeriods: 1
+      Threshold: !Ref BillingAlarmUsd
+      ComparisonOperator: GreaterThanThreshold
+      # Billing metrics are absent until charges accrue; missing data is not a breach.
+      TreatMissingData: ignore
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref CostAlarmTopic
+      OKActions:
+        - !Ref CostAlarmTopic
+
+Outputs:
+  CostAlarmTopicArn:
+    Description: SNS topic ARN for budget and billing alarm notifications
+    Value: !Ref CostAlarmTopic
+    Export:
+      Name: !Sub ${AWS::StackName}-CostAlarmTopicArn
+
+  CostAlarmTopicName:
+    Description: SNS topic name
+    Value: !GetAtt CostAlarmTopic.TopicName
+    Export:
+      Name: !Sub ${AWS::StackName}-CostAlarmTopicName
+
+  MonthlyBudgetName:
+    Description: Monthly COST budget name
+    Value: !Ref MonthlyCostBudget
+    Export:
+      Name: !Sub ${AWS::StackName}-MonthlyBudgetName
+
+  BillingAlarmName:
+    Description: CloudWatch billing alarm name
+    Value: !Ref BillingAlarm
+    Export:
+      Name: !Sub ${AWS::StackName}-BillingAlarmName
