@@ -34,6 +34,12 @@ spec:
       kind: HorizontalPodAutoscaler
     - group: networking.k8s.io
       kind: Ingress
+    # W6D5 Task 1: taxcalc-worker-scaledobject (base/12-taxcalc-worker.scaledobject.yaml)
+    # scales taxcalc-api-worker on Kafka consumer-group lag. KEDA's operator is
+    # cluster infrastructure (installed once, out-of-band, not GitOps-managed by
+    # this project); only the namespaced ScaledObject CR taxcalc-api owns is added here.
+    - group: keda.sh
+      kind: ScaledObject
   roles:
     - name: developer
       description: Sync and update taxcalc apps in taxcalc-dev and taxcalc-staging only. No delete, no prod promotion.

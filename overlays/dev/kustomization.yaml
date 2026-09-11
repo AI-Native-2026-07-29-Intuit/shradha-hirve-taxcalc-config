@@ -35,3 +35,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  # taxcalc-api-worker's SPRING_PROFILES_ACTIVE stays "worker" (set directly on
+  # the container, not via the shared ConfigMap's SPRING_PROFILES_ACTIVE key
+  # patched above) in every overlay — the worker's run mode is not an
+  # environment concern the way the API's dev/staging/prod profile is.
+  - target:
+      kind: Deployment
+      name: taxcalc-api-worker
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

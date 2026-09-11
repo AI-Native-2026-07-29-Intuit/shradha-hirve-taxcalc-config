@@ -4,6 +4,8 @@ resources:
   - 00-quota-and-limits.yaml
   - 05-platform-dependencies.yaml
   - 10-taxcalc-api.deployment.yaml
+  - 11-taxcalc-api-worker.deployment.yaml
+  - 12-taxcalc-worker.scaledobject.yaml
   - 20-taxcalc-api.service.yaml
   - 30-taxcalc-api.configmap.yaml
   - 40-taxcalc-api.secret.yaml
