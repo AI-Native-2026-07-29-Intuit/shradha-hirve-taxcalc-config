@@ -3,9 +3,6 @@ kind: Kustomization
 namespace: taxcalc-dev
 resources:
   - ../../base
-replicas:
-  - name: taxcalc-api
-    count: 1
 images:
   - name: uptimecrew/taxcalc-api
     newName: uptimecrew/taxcalc-api
@@ -22,15 +19,19 @@ patches:
         path: /data/LOG_LEVEL
         value: "DEBUG"
   - target:
-      kind: HorizontalPodAutoscaler
+      kind: Deployment
       name: taxcalc-api
     patch: |-
       - op: replace
-        path: /spec/minReplicas
-        value: 1
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent
+  # taxcalc-api-worker's SPRING_PROFILES_ACTIVE stays "worker" (set directly on
+  # the container, not via the shared ConfigMap's SPRING_PROFILES_ACTIVE key
+  # patched above) in every overlay — the worker's run mode is not an
+  # environment concern the way the API's dev/staging/prod profile is.
   - target:
       kind: Deployment
-      name: taxcalc-api
+      name: taxcalc-api-worker
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
