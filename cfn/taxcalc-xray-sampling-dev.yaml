@@ -1,0 +1,58 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  taxcalc-api X-Ray sampling rule (W6D5 Task 4, author-only). Defines how the ADOT collector's
+  awsxray exporter samples traces once it is running in a real AWS environment; there is no
+  X-Ray endpoint reachable from local k3d, so this template is authored and lint-checked
+  (cfn-lint/cfn-nag via .github/workflows/cfn-validate.yml) but never deployed against Floci
+  or real AWS from this repo's local workflow — see taxcalc-api/INFRA.md for the deploy-order
+  and ChangeSet conventions this stack would follow if promoted.
+
+Parameters:
+  EnvName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Environment name used for the rule name and tags.
+
+Resources:
+  TaxcalcApiSamplingRule:
+    Type: AWS::XRay::SamplingRule
+    Properties:
+      SamplingRule:
+        RuleName: !Sub taxcalc-api-${EnvName}
+        Priority: 100
+        # ReservoirSize guarantees this many traces per second are always sampled regardless of
+        # FixedRate, so a low-traffic period never drops to zero visibility.
+        ReservoirSize: 10
+        # 5% of requests beyond the reservoir. Deliberately non-zero: a FixedRate of 0 would
+        # mean no additional sampling above the fixed reservoir once traffic exceeds it, which
+        # silently blinds tracing exactly when there's enough load for that reservoir to no
+        # longer represent the traffic mix (the failure this Task 3 SLO gate exists to prevent
+        # going unnoticed on the tracing side, too).
+        FixedRate: 0.05
+        ServiceName: taxcalc-api
+        ServiceType: "*"
+        Host: "*"
+        HTTPMethod: "*"
+        URLPath: "*"
+        ResourceARN: "*"
+        Version: 1
+      Tags:
+        - Key: service
+          Value: taxcalc
+        - Key: env
+          Value: !Ref EnvName
+        - Key: tenant
+          Value: shared
+        - Key: feature
+          Value: explain-liability
+
+Outputs:
+  SamplingRuleName:
+    Description: X-Ray sampling rule name
+    Value: !Sub taxcalc-api-${EnvName}
+    Export:
+      Name: !Sub ${AWS::StackName}-SamplingRuleName
