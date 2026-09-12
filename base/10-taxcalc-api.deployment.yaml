@@ -44,6 +44,11 @@ spec:
           env:
             - name: JAVA_TOOL_OPTIONS
               value: "-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: taxcalc-anthropic
+                  key: ANTHROPIC_API_KEY
           resources:
             requests:
               cpu: 250m
