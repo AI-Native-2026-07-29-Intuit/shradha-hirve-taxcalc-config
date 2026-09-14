@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: taxcalc-api-pdb
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: taxcalc-api

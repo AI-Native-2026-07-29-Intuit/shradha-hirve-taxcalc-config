@@ -1,0 +1,76 @@
+# W6D5 Task 4 — AUTHOR ONLY. Never apply to k3d.
+#
+# k3d is a fixed set of Docker-container "nodes" (k3d-taxcalc-dev-server-0/agent-0/agent-1);
+# there is no cloud provider, no EC2 fleet, and no Karpenter controller running against this
+# cluster, so a NodePool CR here has nothing to reconcile against. This file documents the
+# real-AWS node-provisioning shape this workload would run under in production and is
+# reviewed/lint-checked as authored YAML, not applied by any overlay or CI job in this repo.
+# It is deliberately NOT listed in any base/ or overlays/*/kustomization.yaml resources:.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: taxcalc-api
+  labels:
+    app.kubernetes.io/name: taxcalc-api
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: karpenter
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: taxcalc-api
+        workload-tier: taxcalc
+    spec:
+      requirements:
+        # Spot first, on-demand as fallback: taxcalc-api tolerates interruption (stateless,
+        # HPA-managed) so spot is the default choice; on-demand only fills in when spot
+        # capacity is unavailable in a given AZ/instance pool.
+        #
+        # Consolidation (WhenEmptyOrUnderutilized below) and spot interruption both drain
+        # nodes by evicting pods, and Task 2's taxcalc-api-pdb (base/14-taxcalc-api.pdb.yaml,
+        # minAvailable: 2) is what keeps that safe: the eviction API a node drain uses respects
+        # PodDisruptionBudgets, so Karpenter/the spot interruption handler cannot voluntarily
+        # evict a taxcalc-api pod that would take ready replicas below 2, even while
+        # consolidating several nodes in the same window. Without that PDB, an eager
+        # consolidation pass could empty the deployment down toward 0 momentarily.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+        # 3 AZs: matches taxcalc-network-dev's three-AZ VPC (cfn/taxcalc-network-dev.yaml) so
+        # Karpenter can actually place replacement nodes wherever capacity exists, and so an
+        # AZ outage never removes more than one third of node capacity at once.
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["m", "c", "r"]
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["4"]
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: taxcalc-api
+      # Consolidate opportunistically, not immediately: WhenEmptyOrUnderutilized lets Karpenter
+      # both remove fully-idle nodes and repack underutilized ones onto fewer nodes, which
+      # WhenEmpty alone would not do. consolidateAfter delays that repacking by 10 minutes so a
+      # burst that has just scaled up (Task 2's taxcalc-api-hpa reacting to a load spike, or a
+      # 0->N KEDA worker scale-up) is not immediately undone by node consolidation fighting the
+      # HPA/KEDA decision that just happened.
+      disruption:
+        consolidationPolicy: WhenEmptyOrUnderutilized
+        consolidateAfter: 600s
+  # Caps total provisioned capacity regardless of how many pods HPA/KEDA ask to schedule. Task
+  # 2's taxcalc-api-hpa can request up to 20 replicas and Task 1's KEDA ScaledObject up to 20
+  # worker replicas; without a NodePool-level ceiling, a runaway metric (a stuck-high
+  # taxcalc_inflight_requests reading, or a lag spike that never drains) would let Karpenter
+  # keep adding nodes indefinitely to satisfy pod requests that never actually get consumed.
+  # This limit is the backstop: HPA/KEDA can ask for more pods than this pool can host, but they
+  # cannot make the pool itself grow without bound.
+  limits:
+    cpu: "64"
+    memory: 256Gi

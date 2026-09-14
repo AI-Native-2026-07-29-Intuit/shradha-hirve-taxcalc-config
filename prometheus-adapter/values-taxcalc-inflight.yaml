@@ -1,0 +1,26 @@
+# Task 2 (W6D5): exposes taxcalc_inflight_requests as a Kubernetes custom metric so
+# taxcalc-api-hpa (overlays/dev via base/13-taxcalc-api.hpa.yaml) can scale on in-flight
+# HTTP request concurrency instead of CPU.
+#
+# Applied to the cluster's existing prometheus-adapter Helm release out-of-band (the adapter
+# itself, like the KEDA operator, is cluster infrastructure and not part of this GitOps
+# project) via:
+#   helm upgrade prometheus-adapter prometheus-community/prometheus-adapter \
+#     -n monitoring -f prometheus-adapter/values-taxcalc-inflight.yaml --reuse-values
+prometheus:
+  url: http://kube-prometheus-stack-prometheus.monitoring.svc
+  port: 9090
+
+rules:
+  default: false
+  custom:
+    - seriesQuery: 'taxcalc_inflight_requests{namespace!="",pod!=""}'
+      resources:
+        overrides:
+          namespace:
+            resource: namespace
+          pod:
+            resource: pod
+      name:
+        as: taxcalc_inflight_requests
+      metricsQuery: 'avg_over_time(taxcalc_inflight_requests{<<.LabelMatchers>>}[1m])'

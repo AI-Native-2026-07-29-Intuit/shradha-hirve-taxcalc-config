@@ -1,0 +1,29 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: taxcalc-worker-scaledobject
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api-worker
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: taxcalc-api-worker
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: kafka.taxcalc-dev.svc.cluster.local:9092
+        consumerGroup: taxcalc-read-model-builder
+        topic: taxpayers.events
+        lagThreshold: "10"
+        offsetResetPolicy: earliest
+        # Dev Kafka has no SASL/TLS listener (base/05-platform-dependencies.yaml
+        # configures a single PLAINTEXT listener) — no TriggerAuthentication.
+        sasl: none
+        tls: disable

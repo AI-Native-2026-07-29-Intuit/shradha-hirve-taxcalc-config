@@ -1,0 +1,64 @@
+# W6D5 Task 4 — AUTHOR ONLY. Never apply to k3d.
+#
+# This is the AWS Distro for OpenTelemetry (ADOT) Collector config this workload would run
+# under in production, exporting the same OTLP traces both to Tempo (this cohort's existing
+# W5D5 tracing backend) and to AWS X-Ray. It is not deployed to k3d: this repo's dev cluster
+# has no otel-collector Service at all today (taxcalc-api's OTEL_EXPORTER_OTLP_ENDPOINT in
+# base/30-taxcalc-api.configmap.yaml points at otel-collector.taxcalc-dev.svc.cluster.local,
+# which has no matching Deployment/Service in base/05-platform-dependencies.yaml — a
+# pre-existing gap, not something this task fixes), and the awsxray exporter half of this
+# config has no AWS X-Ray endpoint to reach from local k3d regardless.
+#
+# The design point this file demonstrates: one traces pipeline, two exporters.
+#   - The Tempo half (otlp -> tempo) could run entirely locally today, against the same
+#     Tempo endpoint the app already targets, with zero AWS dependency.
+#   - The awsxray half needs a real AWS account/region and IAM credentials for the collector's
+#     X-Ray write permissions; it does nothing useful against k3d.
+#   - The application emits one thing — OTLP via OTEL_EXPORTER_OTLP_ENDPOINT — and never knows
+#     which backend(s) receive it. Adding or removing X-Ray as a trace destination is entirely
+#     a collector-config change; it does not touch taxcalc-api's code or its own env vars.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adot-collector-config
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: adot-collector
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    exporters:
+      # Tempo half: could run entirely on local k3d against the cohort's existing W5D5 Tempo
+      # endpoint — no AWS dependency for this exporter.
+      otlp/tempo:
+        endpoint: tempo.taxcalc-dev.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+      # X-Ray half: requires a real AWS region/account and IAM permissions for the collector's
+      # task/pod role to call X-Ray's PutTraceSegments — meaningless against k3d.
+      awsxray:
+        region: us-east-1
+        # Matches cfn/taxcalc-xray-sampling-dev.yaml's ServiceName so segments this exporter
+        # writes are sampled under that rule once both halves exist in a real AWS account.
+        indexed_attributes:
+          - service.name
+
+    service:
+      pipelines:
+        # One traces pipeline, both exporters: every span the app emits reaches both Tempo and
+        # X-Ray from a single OTLP ingestion point, so the app stays vendor-neutral -- it never
+        # imports an AWS SDK or an X-Ray-specific client, only the standard OTLP exporter it
+        # already uses today.
+        traces:
+          receivers: [otlp]
+          exporters: [otlp/tempo, awsxray]

@@ -1,0 +1,54 @@
+# W6D5 Task 4 — AUTHOR ONLY. Never apply to k3d.
+#
+# Demonstrates the same KEDA-scales-a-worker pattern as Task 1's
+# base/12-taxcalc-worker.scaledobject.yaml, but against an AWS SQS queue instead of Kafka lag
+# — the shape this workload would take if its event source were SQS rather than the cohort's
+# self-hosted Kafka. There is no SQS queue and no IAM/pod-identity setup reachable from k3d, so
+# this is authored and reviewed as YAML only; it is not listed in any base/ or overlays/*
+# kustomization.yaml resources: and must never be applied to the local cluster.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: taxcalc-sqs-trigger-auth
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api-worker
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  podIdentity:
+    provider: aws
+    # identityOwner: operator means the AWS permissions (sqs:ReceiveMessage,
+    # sqs:GetQueueAttributes) are granted to the KEDA operator's own IAM role via IRSA, not to
+    # taxcalc-api-worker's pod service account. The worker pod never needs, and never gets,
+    # its own SQS IAM permissions -- only the operator's polling loop (which reads queue depth
+    # to decide replica count) touches SQS's API; the worker itself would consume messages
+    # through whatever client library/credentials it's separately configured with, entirely
+    # decoupled from what scales it.
+    identityOwner: operator
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: taxcalc-worker-sqs-scaledobject
+  namespace: taxcalc-dev
+  labels:
+    app.kubernetes.io/name: taxcalc-api-worker
+    app.kubernetes.io/part-of: taxcalc
+    app.kubernetes.io/managed-by: kubectl
+    app.kubernetes.io/component: worker
+spec:
+  scaleTargetRef:
+    name: taxcalc-api-worker
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  pollingInterval: 15
+  cooldownPeriod: 300
+  triggers:
+    - type: aws-sqs-queue
+      authenticationRef:
+        name: taxcalc-sqs-trigger-auth
+      metadata:
+        queueURL: https://sqs.us-east-1.amazonaws.com/ACCOUNT_ID/taxcalc-taxpayers-events-dev
+        queueLength: "10"
+        awsRegion: us-east-1

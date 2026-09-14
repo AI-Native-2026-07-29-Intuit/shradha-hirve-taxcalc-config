@@ -15,14 +15,17 @@ spec:
                   overlay: dev
                   namespace: taxcalc-dev
                   wave: "0"
+                  branch: w6d5-implementation
                 - env: staging
                   overlay: staging
                   namespace: taxcalc-staging
                   wave: "1"
+                  branch: w6d2-implementation
                 - env: prod
                   overlay: prod
                   namespace: taxcalc-prod
                   wave: "2"
+                  branch: w6d2-implementation
           - clusters:
               selector:
                 matchLabels:
@@ -41,7 +44,7 @@ spec:
       project: taxcalc
       source:
         repoURL: https://github.com/AI-Native-2026-07-29-Intuit/shradha-hirve-taxcalc-config.git
-        targetRevision: w6d2-implementation
+        targetRevision: "{{branch}}"
         path: overlays/{{overlay}}
       destination:
         server: "{{server}}"
